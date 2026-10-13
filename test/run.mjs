@@ -1206,6 +1206,16 @@ report.eq('a suggested one alone stays recommended', host.detectExtras('推荐�
   report.eq('statePayload: lists the card files', state.files, ['a.json'])
   report.eq('statePayload: no folder chooser was reported', state.picker, null)
   report.eq('statePayload: keeps the ceiling visible to the panel', state.keepTotal, 1000)
+  // Two different questions, two keys. `tavern` is "is Tavern installed at all"
+  // (the panel draws a whole missing-requirement screen from it), `tavernApi` is
+  // "is this plugin wired into its plugin API". One object literal cannot hold
+  // both under one name — the later key just wins, without a word.
+  report.eq('statePayload: keeps the install answer under tavern', state.tavern && typeof state.tavern.installed, 'boolean')
+  report.ok(
+    'statePayload: and the plugin-API answer under a name that cannot shadow it',
+    !!state.tavernApi && state.tavernApi.connected === false && state.tavernApi.apiVersion === 0,
+    JSON.stringify(state.tavernApi),
+  )
 
   const noChoice = await act(host, { action: 'pickFolder' })
   report.ok('pickFolder: says so when the host has no chooser', noChoice.ok === false && !!noChoice.error)
@@ -1214,6 +1224,199 @@ report.eq('a suggested one alone stays recommended', host.detectExtras('推荐�
   const unknown = await act(host, { action: 'nope' })
   report.ok('handleAction: an unknown action is refused', unknown.ok === false)
   report.eq('handleAction: and says which one', /nope/.test(String(unknown.error)), true)
+}
+
+/* ------------------------------------------------------- tavern plugin api */
+
+{
+  report.group('tavern · current card')
+  const sb = sandbox('tavern')
+  const host = loadHost(sb.home)
+  // Tavern reports the card, this plugin works on the file, and the two disagree
+  // the moment somebody renames a card on the way in — which is the normal case.
+  writeJson(path.join(sb.cards, 'renamed-on-disk.json'), v2Card({ name: '雾港记事' }))
+  writeJson(path.join(sb.cards, 'file-name-only.json'), v2Card({}))
+  writeJson(path.join(sb.cards, 'exact.json'), v2Card({ name: '同名卡' }))
+
+  report.eq(
+    'findCardFileByName: matches what the card calls itself',
+    host.findCardFileByName('雾港记事'),
+    'renamed-on-disk.json',
+  )
+  report.eq(
+    'findCardFileByName: falls back to the file name',
+    host.findCardFileByName('file-name-only'),
+    'file-name-only.json',
+  )
+  report.eq('findCardFileByName: takes the exact name over a loose one', host.findCardFileByName('同名卡'), 'exact.json')
+  report.eq('findCardFileByName: a name nothing carries resolves to nothing', host.findCardFileByName('没这张卡'), '')
+
+  const handled = new Map()
+  let answer = { name: '雾港记事' }
+  let failure = null
+  const fakeTavern = {
+    apiVersion: 2,
+    handle(name, fn) {
+      handled.set(name, fn)
+      return () => handled.delete(name)
+    },
+    async getCard() {
+      if (failure) throw failure
+      return answer
+    },
+  }
+  host.apply({
+    effect: () => () => {},
+    inject: (deps, cb) => {
+      for (const dep of deps) {
+        if (dep === 'tavern') return cb({ tavern: fakeTavern })
+        // The routes are registered on the scoped context, so it needs the same
+        // two things the real one carries: the service and `effect`.
+        if (dep === 'webServer') {
+          return cb({ webServer: { register: () => () => {} }, effect: () => () => {} })
+        }
+      }
+      return undefined
+    },
+  })
+
+  const NAME = 'dsh-tavern-card-updater/current-card'
+  report.ok('apply: registers the host handler Tavern calls', handled.has(NAME))
+  const handler = handled.get(NAME)
+  const info = await handler({ gameId: 'g-1' })
+  report.eq('current card: names the card the game plays', info.name, '雾港记事')
+  report.eq('current card: and the file it lives in', info.file, 'renamed-on-disk.json')
+  report.eq('current card: and the panel entry that owns it', info.entry && info.entry.label, 'renamed-on-disk')
+  report.eq('current card: reports it as known', info.known, true)
+
+  const noId = await handler({})
+  report.ok('current card: a missing gameId is refused', noId.ok === false && /gameId/.test(String(noId.error)))
+
+  answer = null
+  report.ok('current card: a game with no card is refused', (await handler({ gameId: 'g-2' })).ok === false)
+
+  failure = new Error('这一局还没有开始')
+  const refused = await handler({ gameId: 'g-3' })
+  report.ok(
+    'current card: Tavern refusing is passed through',
+    refused.ok === false && /还没有开始/.test(String(refused.error)),
+  )
+}
+
+{
+  report.group('tavern · ambiguity and absence')
+  const sb = sandbox('tavern-ambiguous')
+  const host = loadHost(sb.home)
+  writeJson(path.join(sb.cards, 'twin-a.json'), v2Card({ name: '双名卡' }))
+  writeJson(path.join(sb.cards, 'twin-b.json'), v2Card({ name: '双名卡' }))
+  report.eq(
+    'findCardFileByName: a name two files answer to resolves to neither',
+    host.findCardFileByName('双名卡'),
+    '',
+  )
+
+  // The updater works on card files whether or not a game is running, so a build
+  // with no Tavern has to load exactly as it did before this was added.
+  const sb2 = sandbox('tavern-absent')
+  const host2 = loadHost(sb2.home)
+  let threw = null
+  try {
+    host2.apply({
+      effect: () => () => {},
+      inject: (deps, cb) => {
+        for (const dep of deps) {
+          if (dep === 'tavern') return cb({ tavern: null })
+          // The routes are registered on the scoped context, so it needs the same
+        // two things the real one carries: the service and `effect`.
+        if (dep === 'webServer') {
+          return cb({ webServer: { register: () => () => {} }, effect: () => () => {} })
+        }
+        }
+        return undefined
+      },
+    })
+  } catch (e) {
+    threw = e
+  }
+  report.ok('apply: loads on a deployment without Tavern', threw === null, threw && threw.message)
+  report.ok('apply: and still serves its own panel state', host2.statePayload().ok === true)
+}
+
+/* -------------------------------------------- tavern · the card's own path */
+
+{
+  report.group("tavern · the card's own path")
+  const sb = sandbox('tavern-path')
+  const host = loadHost(sb.home)
+  // Two files that call themselves the same thing — an original and its MVU copy
+  // do exactly this — which is the case a name cannot resolve and a path can:
+  // Tavern puts the card file in `card.id`.
+  writeJson(path.join(sb.cards, 'renamed-on-disk.json'), v2Card({ name: '雾港记事' }))
+  writeJson(path.join(sb.cards, 'twin.json'), v2Card({ name: '雾港记事' }))
+
+  report.eq('findCardFileByName: two cards of one name resolve to neither', host.findCardFileByName('雾港记事'), '')
+
+  const handled = new Map()
+  let turnCard = { id: 'cards/twin.json', name: '雾港记事' }
+  const fakeTavern = {
+    apiVersion: 2,
+    handle(name, fn) {
+      handled.set(name, fn)
+      return () => handled.delete(name)
+    },
+    async getCard() {
+      return { name: '雾港记事' }
+    },
+    async getTurn({ turn }) {
+      return turn === 7 ? { card: turnCard } : null
+    },
+  }
+  host.apply({
+    effect: () => () => {},
+    inject: (deps, cb) => {
+      for (const dep of deps) {
+        if (dep === 'tavern') return cb({ tavern: fakeTavern })
+        if (dep === 'webServer') {
+          return cb({ webServer: { register: () => () => {} }, effect: () => () => {} })
+        }
+      }
+      return undefined
+    },
+  })
+  const handler = handled.get('dsh-tavern-card-updater/current-card')
+
+  const byTurn = await handler({ gameId: 'g-1', turn: 7 })
+  report.eq('current card: the turn names the file exactly', byTurn.file, 'twin.json')
+  report.eq('current card: and it is known', byTurn.known, true)
+  report.eq('current card: the panel entry travels with it', byTurn.entry && byTurn.entry.label, 'twin')
+
+  // An older conversation may carry an absolute path; only the base name is read.
+  turnCard = { id: path.join(sb.cards, 'renamed-on-disk.json'), name: '雾港记事' }
+  report.eq(
+    'current card: an absolute path resolves the same way',
+    (await handler({ gameId: 'g-1', turn: 7 })).file,
+    'renamed-on-disk.json',
+  )
+
+  // A path that leads nowhere falls back to the name — and the name cannot choose
+  // between the two files, so the answer is "could not tell" rather than a toss-up.
+  const noTurn = await handler({ gameId: 'g-1' })
+  report.eq('current card: without a turn it falls back to the name', noTurn.known, false)
+  report.eq('current card: and reports the name it was given', noTurn.name, '雾港记事')
+
+  turnCard = { id: 'cards/不存在.json', name: '雾港记事' }
+  report.eq(
+    'current card: a path the card folder does not hold falls back to the name',
+    (await handler({ gameId: 'g-1', turn: 7 })).known,
+    false,
+  )
+
+  turnCard = { id: 'cards/改名前.png', name: '雾港记事' }
+  report.eq(
+    'current card: a non-json path falls back too',
+    (await handler({ gameId: 'g-1', turn: 7 })).known,
+    false,
+  )
 }
 
 process.exit(report.finish() ? 1 : 0)

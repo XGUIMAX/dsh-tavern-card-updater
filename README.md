@@ -20,6 +20,7 @@
 - **合并进 MVU 版**：把原版卡的新内容同步进 MVU 版，**永不覆盖** MVU 的状态栏脚本、变量定义与 `tavern_helper`。
 - **备份与还原**：每次写入前自动备份，按卡片分组查看，随时回滚到任意一份；**备份目录可以自己选**，换目录时旧目录里的快照自动搬过去。
 - **检测插件更新**：面板右上角标着当前安装的版本号，每次打开面板都会自动查一次 GitHub。没新版显示「已是最新版」；有新版变成「发现新版 v1.3.0」，点一下直接打开更新页。版本号读的是插件自己的 `package.json`，`git pull` 之后会自己跟着变。
+- **在游玩里认出当前卡**：装了 DSH Tavern 时，每条已写完的消息下面会多一个「在卡片更新器里打开这张卡」按钮。点它，面板打开并定位到这局正在玩的那张卡 —— Tavern 给出的是这张卡**文件的位置**，插件据此直接找到对应条目；只在拿不到位置时才回头比名字，而比不出来（对不上，或者有两张都叫这个名字）时会把原因写在面板里，不替你挑一张。
 
 ## 界面
 
@@ -50,7 +51,7 @@
 - **灰点 + 检测中** —— 刚打开面板，第一次探测还没回来。单独留这一档是为了不把「还没测完」误报成「未连接」
 - **红点 + 未连接** —— 没装，或者被停用了
 
-**任何时候点它都会打开错题库的仓库页**（<https://github.com/XGUIMAX/dsh-wrongbook>）：未连接时那是补装入口，已连接时那是查更新和看文档的地方。鼠标悬停会写明当前状态。
+**任何时候点它都会打开错题库的仓库页**（<https://github.com/XGUIMAX/dsh-tavern-wrongbook>）：未连接时那是补装入口，已连接时那是查更新和看文档的地方。鼠标悬停会写明当前状态。
 
 探测方式是往对方插件自己的路由发一次 `GET /dsh-wrongbook/state`，**每 15 秒复查一次**。用对方的公开接口，不需要事先约定协议，**也不要求两个插件同时升级** —— 对方没装或版本老，这里只会显示未连接，不会有报错弹出来。
 
@@ -133,7 +134,7 @@ dsh plugin --profile web add .
 也可以直接从 GitHub 装，不必先 clone：
 
 ```bash
-dsh plugin --profile tavern add github:XGUIMAX/dsh-card-updater
+dsh plugin --profile tavern add github:XGUIMAX/dsh-tavern-card-updater
 ```
 
 两种装法只差插件从哪来。本地目录装的是 `link:`，改源码立刻生效，适合跟随仓库改；GitHub 装的是仓库快照，靠 `dsh plugin update` 更新。
@@ -149,20 +150,20 @@ dsh-tavern 用的是自己的目录，和标准 DSH 的 `~/.dsh` 不同：独立
 macOS / Linux（按默认目录安装）：
 
 ```bash
-DSH_HOME=~/.dsh-tavern ~/.dsh-tavern/runtime/bin/dsh plugin --profile tavern add github:XGUIMAX/dsh-card-updater
+DSH_HOME=~/.dsh-tavern ~/.dsh-tavern/runtime/bin/dsh plugin --profile tavern add github:XGUIMAX/dsh-tavern-card-updater
 ```
 
 Windows（按默认目录安装）：
 
 ```powershell
-$env:DSH_HOME = "$env:USERPROFILE\.dsh-tavern"; & "$env:USERPROFILE\.dsh-tavern\runtime\dsh.cmd" plugin --profile tavern add github:XGUIMAX/dsh-card-updater
+$env:DSH_HOME = "$env:USERPROFILE\.dsh-tavern"; & "$env:USERPROFILE\.dsh-tavern\runtime\dsh.cmd" plugin --profile tavern add github:XGUIMAX/dsh-tavern-card-updater
 ```
 
 运行时入口的位置按平台不同：macOS / Linux 上是 `runtime/bin/dsh`，Windows 上是 `runtime\dsh.cmd`，因为 npm 在 Windows 上把命令直接放在 prefix 根目录，不进 `bin`。
 
 安装时如果选的是「2 当前目录」（直接回车就是它）或「3 其他目录」，把上面出现的两处 `~/.dsh-tavern` 一起换成你的实际安装根目录即可。
 
-要卸载就把 `add github:XGUIMAX/dsh-card-updater` 换成 `remove dsh-card-updater`。这里跑的仍然是同一套 `dsh plugin`，所以 `dsh.profile.bundles` 一样会自动维护。
+要卸载就把 `add github:XGUIMAX/dsh-tavern-card-updater` 换成 `remove dsh-card-updater`。这里跑的仍然是同一套 `dsh plugin`，所以 `dsh.profile.bundles` 一样会自动维护。
 
 > `dsh plugin` 会调 `pnpm`。dsh-tavern 自带的那个在 `~/.dsh-tavern/tools/bin`（Windows 是 `~/.dsh-tavern\tools`），没在 PATH 里的话先加进去，或者用你系统里已有的 pnpm。
 

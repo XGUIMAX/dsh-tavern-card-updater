@@ -8,6 +8,8 @@ DSH STORE 的目录检查从 manifest、README 与源码提取信号，本文覆
 
 **运行时零依赖。** 宿主端只 import Node 内置模块（`node:fs`、`node:path`、`node:crypto`、`node:child_process`、`node:url`、`node:os`）与 Host 注入的服务（`ctx.webServer`、`ctx.slots`、`ctx.locale`、`ctx.effect`）。没有 `dependencies`，没有构建步骤，没有原生模块。
 
+装了 DSH Tavern 时，两半各自**按需**多取一个服务：宿主端 `ctx.tavern`（读这局正在玩的是哪张卡 —— Tavern 给出这张卡文件的位置，只在它给不出时才回头比名字），浏览器半 `ctx.tavernUi`（在已写完的消息下面加一个「在卡片更新器里打开这张卡」按钮）。两个都不写进 `export const inject`：Tavern 是可选择安装的东西，缺了它插件照常加载，只是没有这个按钮。读卡走的是 Tavern 自己的插件接口（`getTurn` / `getCard`），不碰它的数据目录。
+
 `peerDependencies` 声明 `@deepseek-ai/cordis ^4.0.1`，由 DSH 本身提供。
 
 `engines.node` 为 `>=18`：宿主端只用得到该版本已有的 API，没有用到任何更新的语法或内置能力。
@@ -112,7 +114,7 @@ DSH 兼容范围声明在 `package.json` 的 `dsh.compatibility` 里。`dshRelea
 
 ```sh
 # 在一个新的 profile 上安装
-dsh plugin --profile <profile> add github:XGUIMAX/dsh-card-updater
+dsh plugin --profile <profile> add github:XGUIMAX/dsh-tavern-card-updater
 ```
 
 安装后检查该 profile 的 `package.json`：`dependencies` 中应出现 `dsh-card-updater`，`dsh.profile.bundles` 中应出现同名条目。`dsh plugin` 在装完后会自动核对 bundle 列表，声明了 `dsh.bundle` 的依赖会自行进入层栈，不需要手工改清单。
@@ -131,4 +133,4 @@ dsh plugin --profile <profile> remove dsh-card-updater
 
 ## 报告问题
 
-权限范围、外部服务或失败行为与此处描述不符，属于缺陷，请提到 <https://github.com/XGUIMAX/dsh-card-updater/issues>。
+权限范围、外部服务或失败行为与此处描述不符，属于缺陷，请提到 <https://github.com/XGUIMAX/dsh-tavern-card-updater/issues>。

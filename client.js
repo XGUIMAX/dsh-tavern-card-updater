@@ -1,6 +1,12 @@
-// dsh-card-updater browser half: the settings section and the sidebar-foot entry.
+// dsh-tavern-card-updater browser half: the settings section and the sidebar-foot entry.
+//
+// The registration id MUST equal the package name (`package.json` name). The DSH
+// client module system indexes graph rows by package name and its `arrive()` step
+// throws "bundle ... loaded without registering \"<package name>\" via
+// __ModuleLoader__.load" when the script registers under anything else, so an id
+// that drifts from the package name fails the whole plugin at boot.
 window.__ModuleLoader__.load({
-  id: 'dsh-card-updater',
+  id: 'dsh-tavern-card-updater',
   factory: (require) => {
     const react = require('react')
     const h = react.createElement
@@ -296,6 +302,10 @@ window.__ModuleLoader__.load({
       'upd.tip.failed': '检测失败：{error}',
       'upd.tip.nodata': '仓库还没有发布版本标签，无法比对；点击直接更新到默认分支',
       'upd.version': '当前安装版本 {v}',
+      'msg.openCard': '在卡片更新器里打开这张卡',
+      'msg.located': '已定位到这局正在玩的人物卡',
+      'msg.unknownCard': '认不出这局玩的是哪张卡（Tavern 说它叫「{name}」），已打开面板，可以自己找',
+      'msg.noApi': 'Tavern 接口没接上：{error}',
     }
     const en = {
       nav: 'Card Updater',
@@ -573,6 +583,10 @@ window.__ModuleLoader__.load({
       'upd.tip.failed': 'Check failed: {error}',
       'upd.tip.nodata': 'The repository publishes no version yet; click to update from the default branch',
       'upd.version': 'Installed version {v}',
+      'msg.openCard': 'Open this card in Card Updater',
+      'msg.located': 'Located the character card this game is playing',
+      'msg.unknownCard': 'Could not tell which card this game plays (Tavern calls it "{name}"); the panel is open for a manual search',
+      'msg.noApi': 'Tavern API is not connected: {error}',
     }
 
     const CSS = [
@@ -732,7 +746,7 @@ window.__ModuleLoader__.load({
     /* dsh-peer-link —— 对端插件状态按钮：错题库宿主半在跑就显示绿点，否则红点并可点击前往仓库下载。 */
     const PEER = {
       base: '/dsh-wrongbook',
-      url: 'https://github.com/XGUIMAX/dsh-wrongbook',
+      url: 'https://github.com/XGUIMAX/dsh-tavern-wrongbook',
       name: '错题库',
     }
     function PeerLink() {
@@ -762,7 +776,49 @@ window.__ModuleLoader__.load({
         h('span', { className: 'state' }, ok ? '已连接' : (online === null ? '检测中' : '未连接')),
       )
     }
-    const REPO_URL = 'https://github.com/XGUIMAX/dsh-card-updater'
+    const REPO_URL = 'https://github.com/XGUIMAX/dsh-tavern-card-updater'
+
+    /**
+     * A one-way channel from outside the panel into it.
+     *
+     * The message-action button comes from Tavern, and the sidebar entry and the
+     * settings section each mount their own tree — none of them can see the
+     * panel's state, so the button cannot open anything by calling it. It
+     * publishes an intent here instead ("show me this card", "say this"), and
+     * whoever is listening does the part that needs state. Nothing listening is
+     * not an error: an intent waits a few seconds so a panel mounting right after
+     * still picks it up, and is then dropped.
+     */
+    const panelIntents = { subs: new Set(), last: null }
+    const INTENT_TTL = 8000
+
+    function publishPanelIntent(intent) {
+      const record = Object.assign({ at: Date.now() }, intent)
+      panelIntents.last = record
+      for (const fn of Array.from(panelIntents.subs)) {
+        try {
+          fn(record)
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[dsh-card-updater] 面板意图处理失败:', e)
+        }
+      }
+    }
+
+    /** Subscribes to those intents, replaying a recent one for a panel that arrives late. */
+    function subscribePanelIntent(fn) {
+      panelIntents.subs.add(fn)
+      const pending = panelIntents.last
+      if (pending && Date.now() - pending.at < INTENT_TTL) {
+        try {
+          fn(pending)
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[dsh-card-updater] 待处理的面板意图失败:', e)
+        }
+      }
+      return () => panelIntents.subs.delete(fn)
+    }
 
     /**
      * Last self-update verdict, kept in module scope so the panel can show an
@@ -2964,6 +3020,27 @@ window.__ModuleLoader__.load({
       }, [])
 
       /**
+       * Where a request from outside lands.
+       *
+       * The search box is what "show me this card" means here: every card row is
+       * already a search result, so focusing the card is filtering to it, and the
+       * notice line is where the reason goes when the card could not be told
+       * apart from another one.
+       */
+      useEffect(
+        () =>
+          subscribePanelIntent((intent) => {
+            if (intent.focus) {
+              setTab('cards')
+              setFilter('all')
+              setQuery(intent.focus)
+            }
+            if (intent.notice !== undefined) setNotice(intent.notice)
+          }),
+        [],
+      )
+
+      /**
        * Whether the card agent is working on any card right now.
        *
        * Writing to a card while the agent holds it would race: the agent keeps its
@@ -3803,6 +3880,11 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener('keydown', onKey)
       }, [open])
 
+      // Opening this sheet is this component's own state, so a request from
+      // outside the panel — the message-action button — arrives as an intent
+      // rather than as a call. The panel it just opened picks up the rest.
+      useEffect(() => subscribePanelIntent(() => setOpen(true)), [])
+
       const label = t('entry.title')
 
       // A fragment keeps the entry to a single child, so the seat's flex
@@ -3968,6 +4050,71 @@ window.__ModuleLoader__.load({
           SideEntry,
         ),
       )
+
+      /**
+       * The card being played, one click from the message it was played in.
+       *
+       * Tavern hands out the card itself; the host half turns its name into a file
+       * in the card folder; the panel opens on it. Going through `tavernUi` means
+       * nothing here needs a route of this plugin's own, and a player who switched
+       * the plugin off for this game gets Tavern's own refusal instead of a button
+       * that half works.
+       */
+      let tavernUiOff = null
+      if (typeof ctx.inject === 'function') {
+        ctx.inject(['tavernUi'], (scoped) => {
+          if (tavernUiOff) {
+            try {
+              tavernUiOff()
+            } catch {
+              /* already withdrawn */
+            }
+            tavernUiOff = null
+          }
+          const ui = scoped && scoped.tavernUi ? scoped.tavernUi : null
+          // Both halves of this belong to the second version of the browser API:
+          // the button, and the call back into the host that resolves the card.
+          if (!ui || typeof ui.registerMessageAction !== 'function' || typeof ui.callHost !== 'function') return
+          const off = ui.registerMessageAction({
+            id: 'dsh-tavern-card-updater/open-current-card',
+            label: t('msg.openCard'),
+            when: (context) => !!(context && context.settled !== false),
+            run: async (context) => {
+              const gameId = String((context && context.gameId) || '')
+              // The turn travels along: it is what lets the host half ask Tavern
+              // for the card's own path, instead of matching a name to a file.
+              const turn = Number(context && context.turn)
+              let got = null
+              try {
+                got = await ui.callHost('dsh-tavern-card-updater/current-card', {
+                  gameId,
+                  turn: Number.isFinite(turn) ? turn : 0,
+                })
+              } catch (e) {
+                got = { ok: false, error: e && e.message ? e.message : String(e) }
+              }
+              if (!got || got.ok === false) {
+                publishPanelIntent({
+                  notice: t('msg.noApi').replace('{error}', (got && got.error) || '未知错误'),
+                })
+                return
+              }
+              if (got.known) {
+                publishPanelIntent({
+                  focus: (got.entry && got.entry.label) || got.name || '',
+                  notice: t('msg.located'),
+                })
+                return
+              }
+              publishPanelIntent({
+                focus: got.name || '',
+                notice: t('msg.unknownCard').replace('{name}', got.name || '（无名）'),
+              })
+            },
+          })
+          tavernUiOff = typeof off === 'function' ? off : null
+        })
+      }
     }
 
     // `uiWorkspace` is declared, not looked up at runtime: cordis resolves only
@@ -3976,6 +4123,6 @@ window.__ModuleLoader__.load({
     // browser. The window it exposes is the folder chooser this panel wants, and
     // the client UI ships it, which is the same dependency the shipped
     // directory-picker plugin declares.
-    return { name: 'dsh-card-updater', inject: ['slots', 'locale', 'uiWorkspace'], apply }
+    return { name: 'dsh-tavern-card-updater', inject: ['slots', 'locale', 'uiWorkspace'], apply }
   },
 })

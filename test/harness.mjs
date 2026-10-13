@@ -174,9 +174,9 @@ export function loadClient(options) {
   const exposed = names
     .map((n) => `${JSON.stringify(n)}: typeof ${n} === 'undefined' ? undefined : ${n}`)
     .join(',')
-  const marker = /return \{ name: 'dsh-card-updater'/
+  const marker = /return \{ name: 'dsh-tavern-card-updater'/
   if (!marker.test(raw)) throw new Error('client half no longer ends with the expected export')
-  const patched = raw.replace(marker, `return { __test: {${exposed}}, name: 'dsh-card-updater'`)
+  const patched = raw.replace(marker, `return { __test: {${exposed}}, name: 'dsh-tavern-card-updater'`)
 
   let captured = null
   const fakeWindow = {

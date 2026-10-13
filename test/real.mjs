@@ -206,8 +206,17 @@ const diff = (before, after) => before.filter((k) => !after.includes(k))
     )
     // Both spellings of the entry are in use on this machine: cards converted
     // before the rename carry `StatusPlaceHolderImpl`, later ones `<mvu-status/>`.
-    const entries = String(after.data.first_mes || '').match(/<mvu-status\s*\/>|StatusPlaceHolderImpl/g) || []
-    report.eq(`${label}: exactly one status entry in the greeting`, entries.length, 1)
+    //
+    // The count is what this has to protect, not the presence of exactly one. A card
+    // whose interface is a whole-message front end (`findRegex: /[\s\S]*/s`) carries
+    // no status entry at all, and the merge is not supposed to invent one — asserting
+    // "exactly one" reported such a card as broken while nothing was wrong with it.
+    const countIn = (text) => (String(text || '').match(/<mvu-status\s*\/>|StatusPlaceHolderImpl/g) || []).length
+    report.eq(
+      `${label}: the status entry count survives the merge`,
+      countIn(after.data.first_mes),
+      countIn(before.data.first_mes),
+    )
   }
 }
 

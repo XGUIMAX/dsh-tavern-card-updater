@@ -29,8 +29,11 @@ const { client, internals: c, source } = loadClient()
  * real. The dictionary is registered from inside an effect, which is why the
  * effect here runs its callback rather than only recording it: a fake effect
  * leaves every string in the panel unresolved and hides real failures.
+ *
+ * `services` is what the optional scoped lookups hand back. Left out, nothing
+ * resolves, which is the deployment with neither a folder chooser nor Tavern.
  */
-function makeCtx() {
+function makeCtx(services) {
   const dicts = new Map()
   return {
     locale: {
@@ -48,13 +51,21 @@ function makeCtx() {
       const dispose = typeof fn === 'function' ? fn() : null
       return typeof dispose === 'function' ? dispose : () => {}
     },
-    inject() {},
+    inject(deps, cb) {
+      if (!services) return
+      for (const dep of deps) {
+        if (Object.prototype.hasOwnProperty.call(services, dep)) {
+          cb({ [dep]: services[dep] })
+          return
+        }
+      }
+    },
   }
 }
 
 {
   report.group('module wiring')
-  report.eq('registers under the plugin name', client.name, 'dsh-card-updater')
+  report.eq('registers under the plugin name', client.name, 'dsh-tavern-card-updater')
   report.eq('exports an apply', typeof client.apply, 'function')
   for (const service of ['slots', 'locale', 'uiWorkspace']) {
     report.ok(`declares ${service} so cordis resolves it`, (client.inject || []).includes(service))
@@ -612,7 +623,7 @@ report.ok('has the checking state', source.includes("'检测中'"))
 report.ok('has the disconnected state', source.includes("'未连接'"))
 
 /* 未连接时的引导语与跳转目标。 */
-report.ok('points at the wrongbook repo', source.includes('github.com/XGUIMAX/dsh-wrongbook'))
+report.ok('points at the wrongbook repo', source.includes('github.com/XGUIMAX/dsh-tavern-wrongbook'))
 report.ok('tells the reader how to get it', source.includes('未链接到'))
 report.ok('states the 15s recheck interval', source.includes('15000'))
 
@@ -656,4 +667,113 @@ report.ok('preset filter rejects a recommended-only gate', !passes('preset', gat
 report.ok('recommended filter accepts a recommended gate', passes('recommended', gatesOf(['discord', 'recommended'])))
 report.ok('recommended filter rejects a preset-only gate', !passes('recommended', gatesOf(['discord', 'preset'])))
 report.ok('both gates together pass both filters', passes('preset', gatesOf(['preset', 'recommended'])) && passes('recommended', gatesOf(['preset', 'recommended'])))
+
+/* -------------------------------------------------- tavern: message action */
+
+{
+  report.group('tavern · message action intents')
+
+  // The button and the panel never meet: the button leaves an intent, and this
+  // is that channel on its own.
+  const { internals: k } = loadClient()
+  const seen = []
+  const off = k.subscribePanelIntent((intent) => seen.push(intent))
+  k.publishPanelIntent({ focus: '雾港记事', notice: '已定位' })
+  report.eq('publishing reaches a subscriber', seen.length, 1)
+  report.eq('the intent carries the card', seen[0].focus, '雾港记事')
+  report.eq('and the notice', seen[0].notice, '已定位')
+  off()
+  k.publishPanelIntent({ focus: '别的卡' })
+  report.eq('unsubscribing stops delivery', seen.length, 1)
+
+  // A panel that mounts after the button was pressed still has to see it: the
+  // sidebar sheet does not exist until it is opened, and opening it is what the
+  // intent itself asks for.
+  const late = []
+  const offLate = k.subscribePanelIntent((intent) => late.push(intent))
+  report.eq('a late subscriber replays the intent it missed', late.length, 1)
+  report.eq('and replays the same card', late[0].focus, '别的卡')
+  offLate()
+
+  k.panelIntents.last.at = Date.now() - 60_000
+  const stale = []
+  const offStale = k.subscribePanelIntent((intent) => stale.push(intent))
+  report.eq('an intent from a minute ago is not replayed', stale.length, 0)
+  offStale()
+
+  // One subscriber throwing must not take the others down with it.
+  const survivors = []
+  const offThrow = k.subscribePanelIntent(() => {
+    throw new Error('boom')
+  })
+  const offAfter = k.subscribePanelIntent((intent) => survivors.push(intent))
+  k.publishPanelIntent({ focus: '后一个' })
+  report.eq('a throwing subscriber does not stop the next one', survivors.length, 1)
+  offThrow()
+  offAfter()
+}
+
+{
+  report.group('tavern · the button itself')
+
+  const asked = []
+  let answer = { ok: true, name: '雾港记事', file: 'renamed-on-disk.json', known: true, entry: { id: 'card-1', label: '雾港记事' } }
+  let refuse = null
+  const registered = []
+  const fresh = loadClient()
+  const intents = []
+  fresh.internals.subscribePanelIntent((intent) => intents.push(intent))
+  fresh.client.apply(
+    makeCtx({
+      tavernUi: {
+        registerMessageAction(spec) {
+          registered.push(spec)
+          return () => {}
+        },
+        async callHost(name, args) {
+          asked.push({ name, args })
+          if (refuse) throw refuse
+          return answer
+        },
+      },
+    }),
+  )
+
+  report.eq('apply registers exactly one message action', registered.length, 1)
+  const spec = registered[0]
+  report.eq('named after the plugin', spec.id, 'dsh-tavern-card-updater/open-current-card')
+  report.eq('labelled in the panel s own words', spec.label, '在卡片更新器里打开这张卡')
+  report.eq('hidden on a turn that has not settled', spec.when({ settled: false }), false)
+  report.eq('shown on a settled one', spec.when({ settled: true }), true)
+
+  await spec.run({ gameId: 'g-1', turn: 12 })
+  report.eq('the button asks this plugin s own host half', asked[0].name, 'dsh-tavern-card-updater/current-card')
+  report.eq('and hands the game over', asked[0].args.gameId, 'g-1')
+  report.eq('with the turn, so the host can name the card file itself', asked[0].args.turn, 12)
+  report.eq('a known card becomes a focus intent', intents[0].focus, '雾港记事')
+  report.eq('with the locating notice', intents[0].notice, '已定位到这局正在玩的人物卡')
+
+  // Tavern knows the card but no file here answers to its name: the panel opens
+  // on the name anyway and says why the match was not made.
+  answer = { ok: true, name: '没见过的卡', file: '', known: false, entry: null }
+  await spec.run({ gameId: 'g-2' })
+  report.eq('an unmatched card still focuses the name', intents[1].focus, '没见过的卡')
+  report.ok('and says it could not tell them apart', /认不出这局玩的是哪张卡/.test(intents[1].notice))
+
+  // The host half refusing — no Tavern, an old API, a game with no card.
+  answer = { ok: false, error: '没有连上 Tavern 插件接口' }
+  await spec.run({ gameId: 'g-3' })
+  report.ok('a refusal from the host is shown as it came', /没有连上 Tavern 插件接口/.test(intents[2].notice))
+
+  refuse = new Error('TAVERN_PLUGIN_NOT_FOUND')
+  await spec.run({ gameId: 'g-4' })
+  report.ok('a call that never landed is shown too', /TAVERN_PLUGIN_NOT_FOUND/.test(intents[3].notice))
+
+  // Nothing here may become a hard dependency: a build without Tavern has to
+  // keep loading this plugin, which is what the scoped lookup is for.
+  report.ok('tavernUi is reached for, not declared', !/inject:\s*\[[^\]]*'tavernUi'/.test(source))
+  report.ok('the scoped lookup is guarded', source.includes("ctx.inject(['tavernUi']"))
+  report.ok('the host handler name matches the other half', source.includes("'dsh-tavern-card-updater/current-card'"))
+}
+
 process.exit(report.finish() ? 1 : 0)
