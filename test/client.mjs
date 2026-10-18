@@ -776,4 +776,16 @@ report.ok('both gates together pass both filters', passes('preset', gatesOf(['pr
   report.ok('the host handler name matches the other half', source.includes("'dsh-tavern-card-updater/current-card'"))
 }
 
+/* ------------------------------------------- 合并前的二次确认
+ *
+ * The host can see that a card was edited in Tavern between merges. Saying so
+ * afterwards is a notification; making the merge button ask first is a guard,
+ * and it costs one extra click only on the cards that need it.
+ */
+report.ok(
+  'a card edited in Tavern asks before merging over it',
+  source.includes('needsConfirm && !armMerge') && source.includes("t('btn.mergeConfirm')"),
+)
+report.ok('and the warning says what the merge will do', source.includes("t('merge.localEditsWarn')"))
+
 process.exit(report.finish() ? 1 : 0)

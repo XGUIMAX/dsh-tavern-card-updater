@@ -65,6 +65,8 @@ window.__ModuleLoader__.load({
       'err.noBackupDir': '后台没有给出备份目录路径',
       'merge.version': '卡版本号升到 {v}',
       'merge.localEdits': 'Tavern 里在下次合并后又改过这张卡',
+      'merge.localEditsWarn': 'Tavern 里在下次合并后又改过这张卡；合并会覆盖它，再点一次确认',
+      'btn.mergeConfirm': '确认覆盖手改',
       'merge.reloadHint': '文件已写入；Tavern 要重新加载人物卡和世界书才会读到新内容',
       'field.name': '角色名',
       'field.description': '角色描述',
@@ -354,6 +356,8 @@ window.__ModuleLoader__.load({
       'err.noBackupDir': 'The host reported no backup folder',
       'merge.version': 'Card version bumped to {v}',
       'merge.localEdits': 'The card was edited in Tavern after the previous merge',
+      'merge.localEditsWarn': 'The card was edited in Tavern after the previous merge; merging overwrites that. Click again to confirm.',
+      'btn.mergeConfirm': 'Overwrite hand edits',
       'merge.reloadHint': 'Written to disk; Tavern needs a card reload before it sees the new content',
       'field.name': 'name',
       'field.description': 'description',
@@ -1770,6 +1774,10 @@ window.__ModuleLoader__.load({
     /* --------------------------------------------------------- components */
 
     function EntryCard({ entry, u, patch, onPick, onCheck, onImportNew, onMerge, onRemove, onDebug }) {
+      // 合并会覆盖 Tavern 里在两次合并之间的手改。宿主的版本号已经能看出这件事，
+      // 但只在结果里说一句等于事后通知；这里把它变成一次确认，代价是多点一下。
+      const needsConfirm = !!(entry.tavernSync && entry.tavernSync.localEdits)
+      const [armMerge, setArmMerge] = useState(false)
       const st = statusOf(entry, u.data ? u.data.lastReport : null, u.data ? u.data.missing : null)
       // This card's own last result, if the last thing that ran was about it.
       const note = u.message && u.message.cardId === entry.id ? u.message : null
@@ -2122,9 +2130,17 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'dcu-btn tiny primary',
                   disabled: u.busy,
-                  onClick: () => onMerge(entry.id),
+                  title: needsConfirm ? t('merge.localEditsWarn') : '',
+                  onClick: () => {
+                    if (needsConfirm && !armMerge) {
+                      setArmMerge(true)
+                      return
+                    }
+                    setArmMerge(false)
+                    onMerge(entry.id)
+                  },
                 },
-                t('btn.merge'),
+                needsConfirm && armMerge ? t('btn.mergeConfirm') : t('btn.merge'),
               )
             : null,
           h(
