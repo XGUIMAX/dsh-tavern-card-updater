@@ -498,6 +498,16 @@ git push origin main --follow-tags
 
 标签名用 `vX.Y.Z`，且与 `package.json` 的 `version` 保持一致。只推代码不打标签的话，插件会一直认为自己就是最新版。
 
+## Tavern 插件接口第 3 版
+
+面板和卡片文件都在本机，不需要 Tavern；装了 Tavern 3.0（插件接口 v3）之后多一条信息：合并时读一次这张卡在 Tavern 里的**工作版版本号**（`listCards` + `cardRevision`）。
+
+- 上次合并之后在 Tavern 里改过这张卡（版本号变大），合并结果里会标一句「Tavern 里在下次合并后又改过这张卡」。合并照旧执行，备份照旧保留 —— 这是提示，不是拦截。
+- 合并写完文件后，面板会写「文件已写入；Tavern 要重新加载人物卡和世界书才会读到新内容」。本插件直接写卡文件，Tavern 不知道盘上的内容变了，这是它唯一的刷新方式。
+- Tavern 没装、或版本低于 3 时，以上两条都不出现，合并行为与之前完全一致。
+
+没有接进来的几项，各有原因：`updateCardRaw` 会把整卡重新序列化成两空格缩进（19 MB 的卡会明显变大），且单值上限 2 MB，不适合合并这种整卡写；`publishState` / `watchState` 走的是 Tavern 页面里的插件通道，而本插件有自己的一套 HTTP 路由和自建面板；`registerStatusSection` / `registerTurnView` / `cardImporter` / 演出与配音接口都是游玩界面的东西，与卡片工作台的用途不重叠。
+
 ## 许可
 
 MIT

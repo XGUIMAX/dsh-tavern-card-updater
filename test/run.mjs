@@ -1342,6 +1342,86 @@ report.eq('a suggested one alone stays recommended', host.detectExtras('推荐�
   report.ok('apply: and still serves its own panel state', host2.statePayload().ok === true)
 }
 
+/* ---------------------------------------- tavern · the card's revision (v3) */
+
+{
+  report.group('tavern · card revision')
+  const sb = sandbox('tavern-revision')
+  const host = loadHost(sb.home)
+  host.loadConfig()
+
+  const plainPath = path.join(sb.cards, '雾港记事.json')
+  const mvuPath = path.join(sb.cards, '雾港记事 MVU版本.json')
+  writeJson(plainPath, v2Card({ name: '雾港记事', description: '作者写的' }))
+  writeJson(mvuPath, v2Card({ name: '雾港记事 MVU版本', description: '旧的' }))
+
+  // Tavern's revision counter is its own bookkeeping. The plugin can only read
+  // it, so the test drives it by hand to reproduce "the card was edited in
+  // Tavern between two merges" — the case where a merge can overwrite a hand
+  // edit that the merge rules do not know about.
+  let revision = 4
+  const asked = []
+  const fakeTavern = {
+    apiVersion: 3,
+    handle: () => () => {},
+    listCards: async () => [
+      { id: 'cards/雾港记事.json', name: '雾港记事', fileName: '雾港记事.json' },
+      { id: 'cards/雾港记事 MVU版本.json', name: '雾港记事 MVU版本', fileName: '雾港记事 MVU版本.json' },
+    ],
+    cardRevision: async ({ card }) => {
+      asked.push(card)
+      return revision
+    },
+  }
+  host.apply({
+    effect: () => () => {},
+    inject: (deps, cb) => {
+      for (const dep of deps) {
+        if (dep === 'tavern') return cb({ tavern: fakeTavern })
+        if (dep === 'webServer') return cb({ webServer: { register: () => () => {} }, effect: () => () => {} })
+      }
+      return undefined
+    },
+  })
+
+  const meta = await host.tavernCardMeta(mvuPath)
+  report.eq('card revision: found by file name', meta && meta.card, 'cards/雾港记事 MVU版本.json')
+  report.eq('card revision: read from Tavern', meta && meta.revision, 4)
+  report.eq('card revision: asked for exactly that card', asked, ['cards/雾港记事 MVU版本.json'])
+
+  const entry = {
+    id: 'c1',
+    label: '雾港记事',
+    enabled: true,
+    plain: { path: plainPath },
+    mvu: { path: mvuPath },
+  }
+  revision = 4
+  const first = await host.mergeEntry(entry)
+  report.eq('merge: records the revision it saw', entry.tavernRevision, 4)
+  report.eq('merge: the first merge has no earlier revision to compare', entry.tavernSync && entry.tavernSync.localEdits, false)
+  report.ok('merge: the result carries the record back', !!first.tavern && first.tavern.revision === 4, JSON.stringify(first.tavern))
+
+  revision = 7
+  const second = await host.mergeEntry(entry)
+  report.eq('merge: an edit made in Tavern shows up', second.tavern && second.tavern.localEdits, true)
+  report.eq('merge: and the new baseline is kept', entry.tavernRevision, 7)
+
+  const third = await host.mergeEntry(entry)
+  report.eq('merge: an unchanged revision is not an edit', third.tavern && third.tavern.localEdits, false)
+
+  // A v2 Tavern has neither method: no revision, no claim about hand edits.
+  const savedList = fakeTavern.listCards
+  const savedRevision = fakeTavern.cardRevision
+  fakeTavern.apiVersion = 2
+  delete fakeTavern.listCards
+  delete fakeTavern.cardRevision
+  report.eq('card revision: absent on v2', await host.tavernCardMeta(mvuPath), null)
+  fakeTavern.apiVersion = 3
+  fakeTavern.listCards = savedList
+  fakeTavern.cardRevision = savedRevision
+}
+
 /* -------------------------------------------- tavern · the card's own path */
 
 {

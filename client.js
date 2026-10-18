@@ -64,6 +64,8 @@ window.__ModuleLoader__.load({
       'err.openFolder': '打不开这个目录',
       'err.noBackupDir': '后台没有给出备份目录路径',
       'merge.version': '卡版本号升到 {v}',
+      'merge.localEdits': 'Tavern 里在下次合并后又改过这张卡',
+      'merge.reloadHint': '文件已写入；Tavern 要重新加载人物卡和世界书才会读到新内容',
       'field.name': '角色名',
       'field.description': '角色描述',
       'field.personality': '性格',
@@ -349,6 +351,8 @@ window.__ModuleLoader__.load({
       'err.openFolder': 'Could not open that folder',
       'err.noBackupDir': 'The host reported no backup folder',
       'merge.version': 'Card version bumped to {v}',
+      'merge.localEdits': 'The card was edited in Tavern after the previous merge',
+      'merge.reloadHint': 'Written to disk; Tavern needs a card reload before it sees the new content',
       'field.name': 'name',
       'field.description': 'description',
       'field.personality': 'personality',
@@ -722,7 +726,10 @@ window.__ModuleLoader__.load({
       // row disagree with the two neighbours it has to line up with, so it is
       // back to matching them. Whatever offset the desktop shell shows is shared
       // by all three rows, which is a container problem, not this row's.
-      '.dcu-entry{display:flex;align-items:center;gap:8px;width:calc(100% + 4px);height:42px;box-sizing:border-box;margin:4px -2px;padding:0 10px 0 8px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;text-align:left;flex:none}',
+      /* dsh-foot-wrap: 不依赖宿主类名，直接把承载入口的祖先层改成可换行。
+         覆盖两种结构：容器 > .dcu-entry，以及容器 > 包装层(display:contents) > .dcu-entry。 */
+      'div:has(> .dcu-entry), div:has(> div > .dcu-entry){flex-wrap:wrap !important;row-gap:6px !important;align-content:flex-start !important}',
+      '.dcu-entry{display:flex;align-items:center;gap:8px;width:100%;max-width:100%;height:36px;box-sizing:border-box;margin:2px 0;padding:0 8px;border:0;border-radius:10px;overflow:hidden;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;text-align:left;flex:0 0 auto;align-self:flex-start;min-height:0;max-height:36px}',
       '.dcu-entry:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dcu-entry:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}',
       '.dcu-entry[data-wide="false"]{width:36px;height:36px;margin:0;padding:0;gap:0;justify-content:center;border-radius:50%;flex:0 0 auto}',
@@ -1202,6 +1209,13 @@ window.__ModuleLoader__.load({
         const text = mergeText(item)
         if (text) parts.push(text)
       }
+      // Tavern-side facts about the last merge (plugin API v3). The plugin writes
+      // files; Tavern keeps its own parsed copy and its own revision counter, and
+      // a write here does not move either. Both lines say what the panel cannot
+      // otherwise know: whether the card was edited in Tavern since the previous
+      // merge, and that a reload is what makes Tavern read the file again.
+      if (entry.tavernSync && entry.tavernSync.localEdits) parts.push(t('merge.localEdits'))
+      if (entry.tavernSync && entry.tavernSync.wrote) parts.push(t('merge.reloadHint'))
       if (!parts.length) return null
       return h('div', { className: 'dcu-sub' }, parts.join(' · '))
     }
