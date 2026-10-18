@@ -508,6 +508,8 @@ git push origin main --follow-tags
 
 没有接进来的几项，各有原因：`updateCardRaw` 会把整卡重新序列化成两空格缩进（19 MB 的卡会明显变大），且单值上限 2 MB，不适合合并这种整卡写；`publishState` / `watchState` 走的是 Tavern 页面里的插件通道，而本插件有自己的一套 HTTP 路由和自建面板；`registerStatusSection` / `registerTurnView` / `cardImporter` / 演出与配音接口都是游玩界面的东西，与卡片工作台的用途不重叠。
 
+**备份与恢复的两处改动**（1.74.0）：手动备份在写入前比对同一张卡最新的一份，内容相同就不新增文件 —— 连点两次不再多出两份一模一样的快照（本机实测备份目录 313.5 MB 里 196.9 MB 是重复内容，已清理到 116.7 MB）；恢复备份后和合并一样提示「需要重新加载人物卡和世界书」；查卡版本时 `listCards` 的结果缓存半分钟，合并不再每次把整个卡库扫一遍。
+
 ## 许可
 
 MIT

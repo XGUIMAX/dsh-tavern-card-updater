@@ -85,6 +85,7 @@ window.__ModuleLoader__.load({
       'ext.depth_prompt': '深度提示',
       'ext.xiaobaix-template': '小白模板',
       'ok.manualBackup': '已手动备份全部卡片',
+      'ok.manualReused': '{n} 份内容没变，未重复保存',
       'ok.backupDir': '备份目录已改',
       'ok.backupDirMoved': '备份目录已改，搬过来 {moved} 份旧备份',
       'ok.backupDirSkipped': '备份目录已改；有 {n} 份同名但内容不同的备份留在原处没动，两边的都还在，可以自己看一眼 {dir}',
@@ -271,6 +272,7 @@ window.__ModuleLoader__.load({
       'restore.prune.done': '已清理 {n} 份超出上限的备份',
       'restore.deleted': '已删除 {name}',
       'restore.restored': '已恢复 {name}',
+      'restore.reload': '写入后需要重新加载人物卡和世界书',
       'ok.done': '已完成',
       'restore.dir': '目录',
       'tag.manual': '手动备份',
@@ -372,6 +374,7 @@ window.__ModuleLoader__.load({
       'ext.depth_prompt': 'depth prompt',
       'ext.xiaobaix-template': 'xiaobaix template',
       'ok.manualBackup': 'All cards backed up manually',
+      'ok.manualReused': '{n} unchanged, not saved again',
       'ok.backupDir': 'Backup folder changed',
       'ok.backupDirMoved': 'Backup folder changed; {moved} old snapshots moved across',
       'ok.backupDirSkipped':
@@ -559,6 +562,7 @@ window.__ModuleLoader__.load({
       'restore.prune.done': 'Pruned {n} snapshot(s) beyond the limit',
       'restore.deleted': 'Deleted {name}',
       'restore.restored': 'Restored {name}',
+      'restore.reload': 'Reload the card in Tavern to see the restored content',
       'ok.done': 'Done',
       'restore.dir': 'Dir',
       'tag.manual': 'Manual',
@@ -1609,6 +1613,10 @@ window.__ModuleLoader__.load({
         if (r.synced.avatar && r.synced.avatar.length) bits.push(t('sync.avatar'))
       }
       if (r.target) bits.push(String(r.target).split('\\').pop())
+      // Manual backup: identical snapshots are no longer written, and saying how
+      // many were skipped is what keeps "nothing happened" from reading as a
+      // failed backup.
+      if (Number.isFinite(r.reused) && r.reused > 0) bits.push(t('ok.manualReused').replace('{n}', String(r.reused)))
       return bits.length ? ' → ' + bits.join(' · ') : ''
     }
 
@@ -2268,7 +2276,11 @@ window.__ModuleLoader__.load({
             } else if (action === 'deleteBackup') {
               setNotice(t('restore.deleted').replace('{name}', String(args && args.name)))
             } else if (action === 'restoreBackup') {
-              setNotice(t('restore.restored').replace('{name}', String(args && args.name)))
+              const reload = res && res.reloadNeeded
+              setNotice(
+                t('restore.restored').replace('{name}', String(args && args.name)) +
+                  (reload ? ' · ' + t('restore.reload') : ''),
+              )
             } else {
               setNotice(t('ok.done'))
             }

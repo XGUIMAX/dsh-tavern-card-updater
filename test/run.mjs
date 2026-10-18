@@ -782,6 +782,41 @@ const report = createReport('dsh-card-updater host')
   report.ok('restoreBackup: a file that is not a snapshot is refused', badRestore.ok === false)
 }
 
+/* --------------------------------------------- backup · 同内容不重复存一份 */
+
+{
+  report.group('backup · identical snapshots')
+  const sb = sandbox('backup-identical')
+  const host = loadHost(sb.home)
+  const plain = path.join(sb.cards, 'a.json')
+  const mvu = path.join(sb.cards, 'a-mvu.json')
+  writeJson(plain, v2Card({ name: 'A' }))
+  writeJson(mvu, v2Card({ name: 'A MVU' }))
+  host.db.loaded = true
+  host.db.cfg = {
+    version: 1,
+    mergeStrategy: 'standard',
+    cards: [{ id: 'c1', label: 'A', enabled: true, plain: { path: plain }, mvu: { path: mvu } }],
+  }
+
+  const first = await host.manualBackup()
+  const afterFirst = fs.readdirSync(host.backupDir()).filter((n) => host.isBackupName(n)).length
+  const second = await host.manualBackup()
+  const afterSecond = fs.readdirSync(host.backupDir()).filter((n) => host.isBackupName(n)).length
+  report.eq('manual backup: one snapshot per configured file', afterFirst, 2)
+  report.eq('manual backup: a second press writes nothing', afterSecond, afterFirst)
+  report.eq('manual backup: and says how many it reused', second.reused, 2)
+  report.ok(
+    'manual backup: the reused path is the snapshot already there',
+    second.items.every((it) => it.reused === true && it.backup && fs.existsSync(it.backup)),
+    JSON.stringify(second.items),
+  )
+
+  writeJson(plain, v2Card({ name: 'A changed' }))
+  const third = await host.manualBackup()
+  report.eq('manual backup: a changed file is still snapshotted', third.reused, 1)
+}
+
 /* ------------------------------------------------------- backup folder set */
 
 {
@@ -1361,13 +1396,17 @@ report.eq('a suggested one alone stays recommended', host.detectExtras('推荐�
   // edit that the merge rules do not know about.
   let revision = 4
   const asked = []
+  let listCalls = 0
   const fakeTavern = {
     apiVersion: 3,
     handle: () => () => {},
-    listCards: async () => [
-      { id: 'cards/雾港记事.json', name: '雾港记事', fileName: '雾港记事.json' },
-      { id: 'cards/雾港记事 MVU版本.json', name: '雾港记事 MVU版本', fileName: '雾港记事 MVU版本.json' },
-    ],
+    listCards: async () => {
+      listCalls += 1
+      return [
+        { id: 'cards/雾港记事.json', name: '雾港记事', fileName: '雾港记事.json' },
+        { id: 'cards/雾港记事 MVU版本.json', name: '雾港记事 MVU版本', fileName: '雾港记事 MVU版本.json' },
+      ]
+    },
     cardRevision: async ({ card }) => {
       asked.push(card)
       return revision
@@ -1388,6 +1427,10 @@ report.eq('a suggested one alone stays recommended', host.detectExtras('推荐�
   report.eq('card revision: found by file name', meta && meta.card, 'cards/雾港记事 MVU版本.json')
   report.eq('card revision: read from Tavern', meta && meta.revision, 4)
   report.eq('card revision: asked for exactly that card', asked, ['cards/雾港记事 MVU版本.json'])
+  // One library walk per half minute: `listCards` reads every card on disk, and a
+  // merge is not the place to repeat that. The revision is still read fresh.
+  await host.tavernCardMeta(mvuPath)
+  report.eq('card revision: the card library is read once, not per merge', listCalls, 1)
 
   const entry = {
     id: 'c1',
@@ -1420,6 +1463,13 @@ report.eq('a suggested one alone stays recommended', host.detectExtras('推荐�
   fakeTavern.apiVersion = 3
   fakeTavern.listCards = savedList
   fakeTavern.cardRevision = savedRevision
+
+  // Restoring writes the card file the same way a merge does, so it carries the
+  // same "Tavern has to read it again" answer to the panel.
+  const snapName = '1790000000000__manual__雾港记事 MVU版本.json'
+  fs.writeFileSync(path.join(host.backupDir(), snapName), JSON.stringify(v2Card({ name: '旧版' })))
+  const restored = await act(host, { action: 'restoreBackup', name: snapName })
+  report.eq('restore: tells the panel Tavern needs a reload', restored.reloadNeeded, true)
 }
 
 /* -------------------------------------------- tavern · the card's own path */
