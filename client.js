@@ -22,6 +22,57 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // Tavern's browser service, kept where the panel can reach it. Only used for
+    // the cross-window lease below: 「检测全部」 posts many network requests and two
+    // open windows would otherwise run it twice at the same time. Older Tavern
+    // builds do not expose acquireLease, and everything still works without it.
+    let tavernUiRef = null
+
+    /**
+     * Run `fn` while holding this plugin's cross-window write lease on the card
+     * files.
+     *
+     * Merging is read-modify-write on a card file: each window reads the card,
+     * each writes a merged copy, and the later write wins — the earlier merge
+     * disappears with nothing on screen to say it happened. Tavern 3.2's
+     * acquireLease is the only thing here that spans windows; the panel's own
+     * `busy` flag is per window and cannot see the other one.
+     *
+     * The lease is optional: a build without acquireLease runs `fn` directly, and
+     * a failed acquire is not allowed to become the reason a write cannot happen.
+     */
+    async function withWriteLease(fn) {
+      const ui = tavernUiRef
+      if (!ui || typeof ui.acquireLease !== 'function') return fn()
+      let lease = null
+      try {
+        lease = await ui.acquireLease({
+          sessionId: 'card-updater',
+          scope: 'card-updater/write',
+          // Long enough for a large card, short enough that a closed window does
+          // not block the next attempt for long.
+          ttlMs: 2 * 60 * 1000,
+          reason: '写入人物卡',
+        })
+      } catch (e) {
+        if (e && e.code === 'TAVERN_PLUGIN_LEASED') {
+          throw new Error(t('err.writeBusy').replace('{holder}', (e && e.holder) || ''))
+        }
+        // The service is there but the call failed: keep going unguarded.
+      }
+      try {
+        return await fn()
+      } finally {
+        if (lease && typeof lease.release === 'function') {
+          try {
+            lease.release()
+          } catch {
+            /* expired or already released */
+          }
+        }
+      }
+    }
+
     const zh = {
       nav: '卡片更新器',
       'entry.title': '卡片更新器',
@@ -248,6 +299,8 @@ window.__ModuleLoader__.load({
       'ok.restore': '已从备份恢复',
       'hint.interval': '自动检测间隔（分钟，0 = 关闭）：由后台执行，无需保持面板打开',
       'err.bridge': '无法连接后台：卡片更新器插件可能未加载完成，稍后重试。',
+      'err.checkBusy': '另一个窗口正在检测卡片更新（{holder}），等它结束后再试。',
+      'err.writeBusy': '另一个窗口正在写入人物卡（{holder}），等它结束后再试。',
       'pick.title': '选择卡片文件',
       'pick.up': '上一层',
       'pick.explorer': '在资源管理器里查看',
@@ -540,6 +593,8 @@ window.__ModuleLoader__.load({
       'ok.restore': 'Restored from backup',
       'hint.interval': 'Auto check interval (minutes, 0 = off) — runs in the background',
       'err.bridge': 'Cannot reach the host half yet; retry in a moment.',
+      'err.checkBusy': 'Another window is already checking card updates ({holder}); retry when it finishes.',
+      'err.writeBusy': 'Another window is already writing card files ({holder}); retry when it finishes.',
       'pick.title': 'Pick a card file',
       'pick.up': 'Up',
       'pick.explorer': 'View in file manager',
@@ -3311,13 +3366,49 @@ window.__ModuleLoader__.load({
       const doCheck = useCallback(
         // A single-card check reports on its own row; "check all" reports at the
         // top of the panel, where it belongs to no card in particular.
-        (ids) =>
-          u.run(
-            'check',
-            { ids: ids || null },
-            t('ok.check'),
-            Array.isArray(ids) && ids.length === 1 ? ids[0] : null,
-          ),
+        //
+        // "Check all" is the one action worth a cross-window lock: it posts one
+        // network request per card, so two open panels would fetch every thread
+        // twice and race each other's results into the same config. Tavern 3.2
+        // exposes acquireLease for exactly this; without it (older builds) the
+        // check runs unguarded, as it always did.
+        async (ids) => {
+          const single = Array.isArray(ids) && ids.length === 1
+          const cardId = single ? ids[0] : null
+          const ui = tavernUiRef
+          if (single || !ui || typeof ui.acquireLease !== 'function') {
+            return u.run('check', { ids: ids || null }, t('ok.check'), cardId)
+          }
+          let lease = null
+          try {
+            lease = await ui.acquireLease({
+              sessionId: 'card-updater',
+              scope: 'card-updater/check',
+              // Long enough to cover a few hundred threads, short enough that a
+              // closed window does not block the next attempt for long.
+              ttlMs: 10 * 60 * 1000,
+              reason: '检测卡片更新',
+            })
+          } catch (e) {
+            if (e && e.code === 'TAVERN_PLUGIN_LEASED') {
+              u.push(t('err.checkBusy').replace('{holder}', (e && e.holder) || ''), 'bad')
+              return undefined
+            }
+            // The service is there but the call failed: an optional guard must not
+            // be the reason a check cannot run.
+          }
+          try {
+            return await u.run('check', { ids: ids || null }, t('ok.check'), cardId)
+          } finally {
+            if (lease && typeof lease.release === 'function') {
+              try {
+                lease.release()
+              } catch {
+                /* expired or already released */
+              }
+            }
+          }
+        },
         [u],
       )
       // Every card-writing action goes through the same guard: the card agent holds
@@ -3325,7 +3416,12 @@ window.__ModuleLoader__.load({
       const guarded = useCallback(
         (id, action, okText) => {
           if (blockedByDebug()) return undefined
-          return u.run(action, { cardId: id }, okText, id)
+          // The debug guard is per window; the lease is what keeps a second
+          // window from merging the same card on top of this one.
+          return withWriteLease(() => u.run(action, { cardId: id }, okText, id)).catch((e) => {
+            u.push(String(e && e.message ? e.message : e), 'bad')
+            return undefined
+          })
         },
         [blockedByDebug, u],
       )
@@ -3410,7 +3506,13 @@ window.__ModuleLoader__.load({
           // what happens to the chosen file afterwards.
           if (req.mode === 'import') {
             if (blockedByDebug()) return
-            u.run('importPlain', { cardId: req.id, from: path }, t('ok.imported'), req.id)
+            // Importing copies a file into the card folder, so it takes the same
+            // write lease a merge does.
+            void withWriteLease(() =>
+              u.run('importPlain', { cardId: req.id, from: path }, t('ok.imported'), req.id),
+            ).catch((e) => {
+              u.push(String(e && e.message ? e.message : e), 'bad')
+            })
             return
           }
           patch(req.id, req.key, path)
@@ -4114,6 +4216,10 @@ window.__ModuleLoader__.load({
             tavernUiOff = null
           }
           const ui = scoped && scoped.tavernUi ? scoped.tavernUi : null
+          // Hand the service to the panel before any capability check can return:
+          // the lease is optional, and a build without registerMessageAction should
+          // still be able to guard 「检测全部」.
+          tavernUiRef = ui
           // Both halves of this belong to the second version of the browser API:
           // the button, and the call back into the host that resolves the card.
           if (!ui || typeof ui.registerMessageAction !== 'function' || typeof ui.callHost !== 'function') return

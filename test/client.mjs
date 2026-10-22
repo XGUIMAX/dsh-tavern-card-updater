@@ -776,6 +776,28 @@ report.ok('both gates together pass both filters', passes('preset', gatesOf(['pr
   report.ok('the host handler name matches the other half', source.includes("'dsh-tavern-card-updater/current-card'"))
 }
 
+/* ------------------------------------- 检测全部：跨窗口占用锁（Tavern 3.2）
+ *
+ * 「检测全部」每张卡发一次网络请求，两个窗口同时点就跑两轮，结果还互相覆盖。
+ * Tavern 3.2 的 acquireLease 是这里唯一能跨窗口的锁；旧版没有它，检测必须照跑，
+ * 所以每一条失败路径都要留出来。
+ */
+report.ok('the service is kept where the panel can reach it', source.includes('let tavernUiRef = null') && source.includes('tavernUiRef = ui'))
+report.ok('the lease is taken only when the service offers one', source.includes("typeof ui.acquireLease !== 'function'"))
+report.ok('a single-card check is not locked', source.includes('if (single || !ui ||'))
+report.ok('a taken lease is reported as such', source.includes("e.code === 'TAVERN_PLUGIN_LEASED'") && source.includes("t('err.checkBusy')"))
+report.ok('a failed acquire does not stop the check', source.includes('// The service is there but the call failed'))
+report.ok('the lease is released in finally', source.includes('lease.release()'))
+report.ok('both dictionaries define the busy sentence', (source.match(/'err\.checkBusy'/g) || []).length >= 2)
+
+/* 合并是「读卡 → 写卡」：两个窗口各读一次、各写一次，后写的赢，先写的合并没有了。
+ * 面板自己的 busy 只在本窗口有效，跨窗口要靠同一把写锁。 */
+report.ok('card writes take their own scope', source.includes("scope: 'card-updater/write'"))
+report.ok('the merge path is guarded', source.includes('withWriteLease(() => u.run(action'))
+report.ok('importing a file is guarded too', source.includes("withWriteLease(() =>\n              u.run('importPlain'"))
+report.ok('a busy write is reported, not swallowed', source.includes("t('err.writeBusy')"))
+report.ok('both dictionaries define the write sentence', (source.match(/'err\.writeBusy'/g) || []).length >= 2)
+
 /* ------------------------------------------- 合并前的二次确认
  *
  * The host can see that a card was edited in Tavern between merges. Saying so
