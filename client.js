@@ -205,6 +205,7 @@ window.__ModuleLoader__.load({
       'primary.newerUnstated': '作者发布了新更新，贴子没写版本号',
       'primary.postedAt': '贴子更新于 {at}',
       'primary.renamed': '作者改过贴子名，链接仍是同一个（现在叫 {to}）',
+        'primary.currentTitle': '当前贴子名',
       'primary.current': '未发现比本地更新的版本',
       'primary.gated': '有下载条件',
       'primary.presetVersion': '（预设版本 {v}）',
@@ -500,6 +501,7 @@ window.__ModuleLoader__.load({
       'primary.newerUnstated': 'Author posted an update; the thread states no version',
       'primary.postedAt': 'Thread updated {at}',
       'primary.renamed': 'The author renamed this thread; the link is unchanged (now: {to})',
+        'primary.currentTitle': 'Current thread title',
       'primary.current': 'Nothing newer than the local card',
       'primary.gated': 'Download conditions',
       'primary.presetVersion': ' (preset {v})',
@@ -1607,7 +1609,7 @@ window.__ModuleLoader__.load({
         // The link is what identifies the card, and it has not changed — only the
         // heading on top of it. Said that way round, because a message about the
         // title alone reads like a warning that the link might be wrong.
-        const brief = (s) => (String(s).length > 32 ? String(s).slice(0, 32) + '…' : String(s))
+        const brief = (s, n = 32) => (String(s).length > n ? String(s).slice(0, n) + '…' : String(s))
         bits.push({
           kind: 'info',
           text: t('primary.renamed').replace('{to}', brief(state.title)),
@@ -1621,6 +1623,11 @@ window.__ModuleLoader__.load({
           kind: 'info',
           text: t('primary.feed') + '：' + (state.feedTitle || `${state.feedCount} 条`),
         })
+      }
+      // 贴子标题和 feed 里那条通知的标题常常不是一回事：作者改了主标题，通知仍停在发布那天的措辞。
+      // 两者不一致时把当前标题也摆出来，否则界面上只看得见旧的那条，会以为没更新。
+      if (state.title && state.feedTitle && String(state.title).trim() !== String(state.feedTitle).trim()) {
+        bits.push({ kind: 'info', text: t('primary.currentTitle') + '：' + brief(state.title, 60) })
       }
       if (!bits.length) return null
       return h(
