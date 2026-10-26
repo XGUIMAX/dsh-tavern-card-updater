@@ -207,6 +207,7 @@ window.__ModuleLoader__.load({
       'primary.renamed': '作者改过贴子名，链接仍是同一个（现在叫 {to}）',
         'primary.currentTitle': '当前贴子名',
       'primary.current': '未发现比本地更新的版本',
+      'primary.superseded': '本地已有更新版本：{label}（{version}），本条记录可删除',
       'primary.gated': '有下载条件',
       'primary.presetVersion': '（预设版本 {v}）',
       'crash.title': '面板渲染失败',
@@ -245,6 +246,7 @@ window.__ModuleLoader__.load({
       'state.baseline': '待注册基线',
       'state.busy': '执行中…',
       'state.off': '已停用',
+      'state.superseded': '已被新版取代',
       // A card deleted in Tavern takes its file and leaves its entry, and both of
       // these say so rather than leaving a row that looks ordinary.
       'state.gone': '卡文件已不在',
@@ -503,6 +505,7 @@ window.__ModuleLoader__.load({
       'primary.renamed': 'The author renamed this thread; the link is unchanged (now: {to})',
         'primary.currentTitle': 'Current thread title',
       'primary.current': 'Nothing newer than the local card',
+      'primary.superseded': 'A newer version is already on disk: {label} ({version}), so this entry can be removed.',
       'primary.gated': 'Download conditions',
       'primary.presetVersion': ' (preset {v})',
       'crash.title': 'The panel could not be drawn',
@@ -543,6 +546,7 @@ window.__ModuleLoader__.load({
       'state.off': 'disabled',
       'state.gone': 'card file is gone',
       'state.halfGone': 'half of this card is gone',
+      'state.superseded': 'superseded by a newer version',
       'btn.pruneMissing': 'Clear missing',
       'prune.none': 'Nothing points at a file that is gone',
       'prune.hint': 'Remove entries whose files are no longer on disk',
@@ -1292,7 +1296,7 @@ window.__ModuleLoader__.load({
      * @param {object} [missing] - the host's map of entries whose files are gone.
      * @returns {{kind: string, text: string}}
      */
-    function statusOf(entry, report, missing) {
+    function statusOf(entry, report, missing, superseded) {
       // A file the disk no longer has comes first: every other answer below is
       // about a card that can be opened, and this one cannot be. A card deleted
       // in Tavern leaves its entry behind, and without this the row looked
@@ -1301,6 +1305,11 @@ window.__ModuleLoader__.load({
       if (gone && gone.gone) return { kind: 'bad', text: t('state.gone') }
       if (gone) return { kind: 'warn', text: t('state.halfGone') }
       if (entry.enabled === false) return { kind: 'idle', text: t('state.off') }
+      // A card the folder has already moved past is reported before the link
+      // check: whether this row still reaches a release page says nothing about
+      // the newer file of the same card sitting next to it.
+      const behind = superseded && superseded[entry.id]
+      if (behind) return { kind: 'warn', text: t('state.superseded') }
       const hasPlain = !!normalizeSrc(entry.plain && entry.plain.src)
       const hasPrimary = !!String((entry.primary && entry.primary.url) || '').trim()
       if (!hasPlain && !hasPrimary) return { kind: 'idle', text: t('state.unlinked') }
@@ -1547,10 +1556,19 @@ window.__ModuleLoader__.load({
      * @param {object} entry - the config entry.
      * @returns {object|null} the hint element, or null when there is nothing to say.
      */
-    function primaryHint(entry) {
+    function primaryHint(entry, superseded) {
       const state = entry.primary || {}
-      if (!String(state.url || '').trim()) return null
+      const behind = superseded && superseded[entry.id]
+      // A card with no release link still has something to say when a newer
+      // version of it is already on disk; only a silent row is worth skipping.
+      if (!String(state.url || '').trim() && !behind) return null
       const bits = []
+      if (behind) {
+        bits.push({
+          kind: 'warn',
+          text: t('primary.superseded').replace('{label}', behind.byLabel).replace('{version}', behind.version),
+        })
+      }
       if (state.error) {
         bits.push({ kind: 'bad', text: t('primary.error') + '：' + state.error })
         // A connection that never reached the host is almost always the proxy,
@@ -1842,7 +1860,12 @@ window.__ModuleLoader__.load({
       // 但只在结果里说一句等于事后通知；这里把它变成一次确认，代价是多点一下。
       const needsConfirm = !!(entry.tavernSync && entry.tavernSync.localEdits)
       const [armMerge, setArmMerge] = useState(false)
-      const st = statusOf(entry, u.data ? u.data.lastReport : null, u.data ? u.data.missing : null)
+      const st = statusOf(
+        entry,
+        u.data ? u.data.lastReport : null,
+        u.data ? u.data.missing : null,
+        u.data ? u.data.superseded : null,
+      )
       // This card's own last result, if the last thing that ran was about it.
       const note = u.message && u.message.cardId === entry.id ? u.message : null
       /**
@@ -2123,7 +2146,7 @@ window.__ModuleLoader__.load({
           }),
         ),
         ),
-        primaryHint(entry),
+        primaryHint(entry, u.data ? u.data.superseded : null),
         entry.lastError ? h('div', { className: 'dcu-sub' }, '⚠ ' + entry.lastError) : null,
         mergeLine(entry),
         // What can be done to the card, gathered in one row and pushed right, so
@@ -3259,6 +3282,8 @@ window.__ModuleLoader__.load({
       const dirty = !!(draft && u.data && JSON.stringify(draft) !== JSON.stringify(u.data.config))
       const report = u.data ? u.data.lastReport : null
       const missing = u.data ? u.data.missing : null
+      // Entries the card folder has already moved past, keyed by entry id.
+      const superseded = u.data ? u.data.superseded : null
       // How many entries point at files the disk no longer has. The host reports
       // this per entry, and the toolbar's clear button reads its count off it.
       const goneCount = ((u.data && u.data.config && u.data.config.cards) || []).filter(
@@ -3277,7 +3302,11 @@ window.__ModuleLoader__.load({
         // A card with no file on disk is not news, so it goes last however the
         // list is sorted: it cannot be checked, merged or opened.
         if (missing && missing[entry.id] && missing[entry.id].gone) return 9
-        if (statusOf(entry, report, missing).kind === 'warn') return 0
+        // History, not news: an entry the folder has moved past sorts to the
+        // bottom rather than sharing the front row with cards that really are
+        // waiting on a newer release.
+        if (superseded && superseded[entry.id]) return 8
+        if (statusOf(entry, report, missing, superseded).kind === 'warn') return 0
         // A rename is worth surfacing: the card is the same card and the link has
         // not moved, but the name people know it by has, and that is easy to miss
         // in a long list.
