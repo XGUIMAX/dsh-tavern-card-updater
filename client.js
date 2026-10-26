@@ -1605,11 +1605,13 @@ window.__ModuleLoader__.load({
             (preset ? t('primary.presetVersion').replace('{v}', preset) : ''),
         })
       }
+      // brief 必须在 if 之外定义：下面有两处用它（改名提示、当前标题），
+      // 放在 if 块里会让块外那处 ReferenceError，整块面板渲染失败。
+      const brief = (s, n = 32) => (String(s).length > n ? String(s).slice(0, n) + '…' : String(s))
       if (state.renamedFrom && state.title) {
         // The link is what identifies the card, and it has not changed — only the
         // heading on top of it. Said that way round, because a message about the
         // title alone reads like a warning that the link might be wrong.
-        const brief = (s, n = 32) => (String(s).length > n ? String(s).slice(0, n) + '…' : String(s))
         bits.push({
           kind: 'info',
           text: t('primary.renamed').replace('{to}', brief(state.title)),
